@@ -61,7 +61,7 @@
         return this.defaultFile.storage_url;
       },
       sandbox() {
-        return plugin_data.sandbox;
+        return plugin_data.sandbox || 'allow-scripts';
       },
     },
     mounted() {
