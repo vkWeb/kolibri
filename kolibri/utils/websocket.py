@@ -4,6 +4,7 @@ https://github.com/Pithikos/python-websocket-server/blob/fd0b190de3bef32967f64f6
 """
 import errno
 import logging
+import socket
 import struct
 import sys
 import threading
@@ -84,7 +85,10 @@ class API:
         self._unicast_(client, msg)
 
     def send_message_to_all(self, msg):
-        self._multicast_(msg)
+        if self._started:
+            self._multicast_(msg)
+        else:
+            send_internal_message(SEND_MESSAGE_ALL + msg)
 
 
 # ------------------------- Implementation -----------------------------
@@ -375,6 +379,56 @@ def try_decode_UTF8(data):
 SERVER = WebsocketServer()
 
 
+SEND_MESSAGE = "a"
+SEND_MESSAGE_ALL = "b"
+
+HOST = "localhost"
+PORT = 9999
+
+
+def send_internal_message(msg):
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+    try:
+        # Connect to server and send data
+        sock.connect((HOST, PORT))
+        sock.sendall(msg + "\n")
+    finally:
+        sock.close()
+
+
+class InternalMessagingHandler(StreamRequestHandler):
+    def handle(self):
+        data = self.rfile.readline().strip()
+        operation = data[0]
+        if operation == SEND_MESSAGE:
+            client_id = data[1:4]
+            SERVER.send_message(client_id, data[4:])
+        elif operation == SEND_MESSAGE_ALL:
+            SERVER.send_message_to_all(data[1:])
+
+
+class InternalMessagingServer(ThreadingMixIn, TCPServer):
+    """
+    A server for passing internal messages.
+    """
+
+    allow_reuse_address = True
+    daemon_threads = True  # comment to keep threads alive until finished
+
+    def start(self, host, port):
+        TCPServer.__init__(self, (host, port), InternalMessagingHandler)
+        self.port = self.socket.getsockname()[1]
+        self.thread = threading.Thread(target=self.serve_forever).start()
+
+    def stop(self):
+        self.shutdown()
+        self.server_close()
+
+
+__MESSAGING_SERVER = InternalMessagingServer()
+
+
 class WebSocketPlugin(SimplePlugin):
     def __init__(self, bus, port, host):
         self.bus = bus
@@ -382,7 +436,9 @@ class WebSocketPlugin(SimplePlugin):
         self.host = host
 
     def start(self):
+        __MESSAGING_SERVER.start(HOST, PORT)
         SERVER.start(self.port, self.host)
 
     def stop(self):
+        __MESSAGING_SERVER.stop()
         SERVER.stop()
